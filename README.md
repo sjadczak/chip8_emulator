@@ -1,2 +1,4 @@
-# chip8_emulator
-Chip8 Emulator in C
+# Chip8 Emulator
+chip8 emulator implemented in C.
+
+## [https://www.udemy.com/course/creating-a-chip-8-emulator-in-c/](Udemy Course)
