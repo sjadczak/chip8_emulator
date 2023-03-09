@@ -1,6 +1,9 @@
 #include <SDL2/SDL.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 #include "chip8.h"
 
@@ -9,9 +12,95 @@ const char keyboard_map[CHIP8_TOTAL_KEYS] = {
     SDLK_8, SDLK_9, SDLK_a, SDLK_b, SDLK_c, SDLK_d, SDLK_e, SDLK_f,
 };
 
+void draw_boobies(struct chip8 *chip8, int x, int y) {
+  chip8_screen_draw_sprite(&chip8->screen, x, y, &chip8->memory.memory[0x28],
+                           5);
+  chip8_screen_draw_sprite(&chip8->screen, x + 5, y,
+                           &chip8->memory.memory[0x00], 5);
+  chip8_screen_draw_sprite(&chip8->screen, x + 10, y,
+                           &chip8->memory.memory[0x00], 5);
+  chip8_screen_draw_sprite(&chip8->screen, x + 15, y,
+                           &chip8->memory.memory[0x28], 5);
+  chip8_screen_draw_sprite(&chip8->screen, x + 20, y,
+                           &chip8->memory.memory[0x05], 5);
+  chip8_screen_draw_sprite(&chip8->screen, x + 25, y,
+                           &chip8->memory.memory[0x0F], 5);
+  chip8_screen_draw_sprite(&chip8->screen, x + 30, y,
+                           &chip8->memory.memory[0x19], 5);
+};
+
+void reverse(char *str, int len) {
+  int i = 0, j = len - 1, temp;
+  while (i < j) {
+    temp = str[i];
+    str[i] = str[j];
+    str[j] = temp;
+    i++;
+    j--;
+  }
+};
+
+int intToStr(int x, char str[], int d) {
+  int i = 0;
+  while (x) {
+    str[i++] = (x % 10) + '0';
+    x /= 10;
+  }
+
+  while (i < d) {
+    str[i++] = '0';
+  }
+
+  reverse(str, i);
+  str[i] = '\0';
+  return i;
+};
+
+void ftoa(float n, char *res, int afterpoint) {
+  int ipart = (int)n;
+  float fpart = n - (float)ipart;
+  int i = intToStr(ipart, res, 0);
+  if (afterpoint != 0) {
+    res[i] = '.';
+    fpart = fpart * pow(10.0, (double)afterpoint);
+    intToStr((int)fpart, res + i + 1, afterpoint);
+  }
+};
+
 int main(int argc, char **argv) {
+  if (argc < 2) {
+    printf("You must provide a file to load\n");
+    return -1;
+  }
+
+  const char* filename = argv[1];
+  printf("The filename to load is %s\n", filename);
+
+  FILE* f = fopen(filename, "rb");
+  if (!f)
+  {
+	  printf("Failed to open the file\n");
+	  fclose(f);
+	  return -1;
+  }
+
+  fseek(f, 0, SEEK_END);
+  long size = ftell(f);
+  fseek(f, 0, SEEK_SET);
+
+  char buf[size];
+  int res = fread(buf, size, 1, f);
+  if (res != 1)
+  {
+	  printf("Failed to read from file.\n");
+	  fclose(f);
+	  return -1;
+  }
+
   struct chip8 chip8;
   chip8_init(&chip8);
+  chip8_load(&chip8, buf, size);
+  chip8_keyboard_set_map(&chip8.keyboard, keyboard_map);
 
   // set up data for system checks
   chip8_memory_set(&chip8.memory, 0x400, 'Z');
@@ -95,17 +184,15 @@ int main(int argc, char **argv) {
           run = SDL_FALSE;
           break;
         }
-        char vkey = chip8_keyboard_map(keyboard_map, key);
+        char vkey = chip8_keyboard_map(&chip8.keyboard, key);
         if (vkey != -1) {
-          printf("chip8> key 0x%X is down\n", vkey);
           chip8_keyboard_down(&chip8.keyboard, vkey);
         }
       } break;
       case SDL_KEYUP: {
         char key = event.key.keysym.sym;
-        int vkey = chip8_keyboard_map(keyboard_map, key);
+        int vkey = chip8_keyboard_map(&chip8.keyboard, key);
         if (vkey != -1) {
-          printf("chip8> key 0x%X is up\n", vkey);
           chip8_keyboard_up(&chip8.keyboard, vkey);
         }
       } break;
@@ -114,17 +201,45 @@ int main(int argc, char **argv) {
     if (run) {
       SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
       SDL_RenderClear(renderer);
-
       SDL_SetRenderDrawColor(renderer, 0, 177, 64, 0);
-      SDL_Rect r;
-      r.x = 0;
-      r.y = 0;
-      r.w = 40;
-      r.h = 40;
-      SDL_RenderFillRect(renderer, &r);
+
+      for (int x = 0; x < CHIP8_WIDTH; x++) {
+        for (int y = 0; y < CHIP8_HEIGHT; y++) {
+          if (chip8_screen_is_set(&chip8.screen, x, y)) {
+            SDL_Rect r;
+            r.x = x * CHIP8_WINDOW_MULTIPLIER;
+            r.y = y * CHIP8_WINDOW_MULTIPLIER;
+            r.w = CHIP8_WINDOW_MULTIPLIER;
+            r.h = CHIP8_WINDOW_MULTIPLIER;
+            SDL_RenderFillRect(renderer, &r);
+          }
+        }
+      }
+
       SDL_RenderPresent(renderer);
+
+      if (chip8.registers.dt > 0) {
+        usleep(5000);
+        chip8.registers.dt -= 1;
+      }
+
+      if (chip8.registers.st > 0) {
+        char play_time[20];
+        float time = 0.016667 * (float)chip8.registers.st;
+        ftoa(time, play_time, 5);
+        char cmd[256];
+        sprintf(cmd, "play -q -n synth %s sin %d > /dev/null 2>&1", play_time,
+                440);
+        system(cmd);
+        chip8.registers.st = 0;
+      }
+
+	  unsigned short opcode = chip8_memory_get_short(&chip8.memory, chip8.registers.PC);
+	  chip8.registers.PC += 2;
+	  chip8_exec(&chip8, opcode);
     }
   }
+
   printf("chip8> emulation ended\n");
   SDL_DestroyWindow(window);
   SDL_Quit();
